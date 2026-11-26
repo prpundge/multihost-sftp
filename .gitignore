@@ -1,0 +1,10 @@
+target/
+# runtime state (lists of already uploaded files) when run from the project folder
+data/
+# IDE files
+.idea/
+*.iml
+.vscode/
+.classpath
+.project
+.settings/

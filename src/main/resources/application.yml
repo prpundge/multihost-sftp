@@ -1,0 +1,61 @@
+# ==========================================================================================
+#  WHICH FILES GO WHERE
+#  Every entry under sftp-transfer.transfers becomes one Camel route (built from the single
+#  XML route template in src/main/resources/camel/). Adding a host or a remote folder means
+#  adding an entry here - no Java or XML changes. See README.md for all keys.
+# ==========================================================================================
+sftp-transfer:
+  # --- global settings (pollDelay, knownHostsFile and strictHostKeyChecking can also be set per transfer)
+  pollDelay: 10s
+  knownHostsFile: ${SFTP_KNOWN_HOSTS_FILE:${user.home}/.ssh/known_hosts}
+  strictHostKeyChecking: true
+  maxRetries: 3                 # retries after the first failed attempt, then the file goes to errorDir
+  retryDelay: 5s
+  connectTimeout: 10s
+  readLockCheckInterval: 1s     # a file must stay unchanged this long before it is picked up
+  readLockTimeout: 30s
+  idempotentDir: ${SFTP_TRANSFER_STATE_DIR:data/idempotent}
+
+  transfers:
+    - name: bankA-payments
+      sourceDir: /data/out/bankA
+      filePattern: "PAY_.*\\.csv"             # regular expression, matched against the whole file name
+      host: sftp.banka.com
+      port: 22
+      username: user1
+      privateKeyPath: /keys/banka_id_rsa
+      # privateKeyPassphrase: ${BANKA_KEY_PASSPHRASE}   # only if the key is encrypted
+      remoteDir: /inbound/payments
+
+    - name: bankB-reports
+      sourceDir: /data/out/bankB
+      filePattern: "RPT_.*\\.txt"
+      host: sftp.bankb.com
+      port: 22
+      username: user2
+      password: ${BANKB_SFTP_PASSWORD}         # comes from the environment, never written here
+      remoteDir: /upload/reports
+
+    # Same host as bankA-payments but another remote folder; same source folder but another pattern
+    # (an ant-style glob this time), plus the optional per-transfer settings.
+    - name: bankA-statements
+      sourceDir: /data/out/bankA
+      filePattern: "glob:STMT_*.xml"
+      host: sftp.banka.com
+      username: user1
+      privateKeyPath: /keys/banka_id_rsa
+      remoteDir: /inbound/statements
+      pollDelay: 1m
+      doneDir: /data/archive/bankA
+      errorDir: /data/failed/bankA
+
+camel:
+  main:
+    name: multihost-sftp
+    routes-include-pattern: classpath:camel/*.xml
+    run-controller: true        # there is no web server: keep the JVM running
+    shutdown-timeout: 30        # seconds to let uploads in progress finish on shutdown
+
+logging:
+  level:
+    sftp.transfer: INFO         # one line per picked-up / uploaded / failed file

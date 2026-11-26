@@ -1,0 +1,86 @@
+# Integration test configuration (profile "it"). Values under "it." and the IT_* "environment variables"
+# are supplied by SftpTransferIntegrationTest (free ports, temp folders, generated keys and secrets).
+sftp-transfer:
+  pollDelay: 200ms
+  knownHostsFile: ${it.knownHosts}
+  maxRetries: 3
+  retryDelay: 200ms
+  connectTimeout: 2s
+  readLockCheckInterval: 200ms
+  readLockTimeout: 3s
+  idempotentDir: ${it.work}/idempotent
+
+  transfers:
+    # --- host A (public key auth, encrypted key): two remote folders, fed from the same source folder
+    - name: bankA-payments
+      sourceDir: ${it.work}/out/bankA
+      filePattern: "PAY_.*\\.csv"
+      host: 127.0.0.1
+      port: ${it.hostA.port}
+      username: userA
+      privateKeyPath: ${it.clientKey}
+      privateKeyPassphrase: ${IT_BANKA_KEY_PASSPHRASE}
+      remoteDir: /inbound/payments
+
+    - name: bankA-statements
+      sourceDir: ${it.work}/out/bankA
+      filePattern: "glob:STMT_*.xml"
+      host: 127.0.0.1
+      port: ${it.hostA.port}
+      username: userA
+      privateKeyPath: ${it.clientKey}
+      privateKeyPassphrase: ${IT_BANKA_KEY_PASSPHRASE}
+      remoteDir: /inbound/statements
+
+    # --- host B (password auth; the password contains characters that are special in URIs)
+    - name: bankB-reports
+      sourceDir: ${it.work}/out/bankB
+      filePattern: "RPT_.*\\.txt"
+      host: 127.0.0.1
+      port: ${it.hostB.port}
+      username: userB
+      password: ${IT_BANKB_PASSWORD}
+      remoteDir: /upload/reports
+
+    - name: bankB-relative-folder        # no leading '/': relative to the login folder (/home/userB/outbox)
+      sourceDir: ${it.work}/out/relative
+      filePattern: ".*\\.txt"
+      host: 127.0.0.1
+      port: ${it.hostB.port}
+      username: userB
+      password: ${IT_BANKB_PASSWORD}
+      remoteDir: outbox
+
+    # --- failure cases
+    - name: bankB-missing-folder         # remote folder does not exist -> upload fails
+      sourceDir: ${it.work}/out/missing
+      filePattern: ".*\\.csv"
+      host: 127.0.0.1
+      port: ${it.hostB.port}
+      username: userB
+      password: ${IT_BANKB_PASSWORD}
+      remoteDir: /does/not/exist
+
+    - name: bankA-wrong-hostkey          # known_hosts has another key for host A -> must refuse
+      sourceDir: ${it.work}/out/mitm
+      filePattern: ".*\\.csv"
+      host: 127.0.0.1
+      port: ${it.hostA.port}
+      username: userA
+      privateKeyPath: ${it.clientKey}
+      privateKeyPassphrase: ${IT_BANKA_KEY_PASSPHRASE}
+      remoteDir: /inbound/payments
+      knownHostsFile: ${it.wrongKnownHosts}
+
+    - name: hanging-host                 # accepts the TCP connection, then never answers
+      sourceDir: ${it.work}/out/hanging
+      filePattern: ".*\\.csv"
+      host: 127.0.0.1
+      port: ${it.hangingHost.port}
+      username: nobody
+      password: ${IT_BANKB_PASSWORD}
+      remoteDir: /in
+
+camel:
+  main:
+    shutdown-timeout: 5

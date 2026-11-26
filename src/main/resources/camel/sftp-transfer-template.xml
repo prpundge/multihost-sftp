@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    The ONE route template used by every transfer.
+
+    Nothing in here is specific to a host, folder or file pattern. At startup TransferRoutesBootstrap creates one
+    route per entry of `sftp-transfer.transfers` in application.yml and fills in the parameters below.
+    To add a host or a remote folder, edit application.yml - not this file.
+
+    Note: Camel endpoint URIs must be written on a single line in XML (the XML parser turns line breaks inside an
+    attribute into spaces), so the options are explained in the comments next to each endpoint.
+-->
+<routeTemplates xmlns="http://camel.apache.org/schema/xml-io">
+
+    <routeTemplate id="sftp-transfer">
+
+        <!-- local side -->
+        <templateParameter name="sourceDir" description="absolute folder to poll"/>
+        <templateParameter name="fileNameRegex" description="Java regex the whole file name must match"/>
+        <templateParameter name="pollDelayMs"/>
+        <templateParameter name="readLockCheckIntervalMs"/>
+        <templateParameter name="readLockTimeoutMs"/>
+        <templateParameter name="doneDir" description="absolute folder for successfully uploaded files"/>
+        <templateParameter name="errorDir" description="absolute folder for files that could not be uploaded"/>
+        <templateParameter name="idempotentFile" description="file listing what this route already uploaded"/>
+
+        <!-- remote side -->
+        <templateParameter name="host"/>
+        <templateParameter name="port"/>
+        <templateParameter name="remoteDir" description="ends with '/'; leading '/' = absolute, otherwise relative to the login folder"/>
+        <templateParameter name="username"/>
+        <templateParameter name="password" defaultValue=""/>
+        <templateParameter name="privateKeyFile" defaultValue=""/>
+        <templateParameter name="privateKeyPassphrase" defaultValue=""/>
+        <templateParameter name="preferredAuthentications"/>
+        <templateParameter name="knownHostsFile" defaultValue="" description="empty when strict host key checking is off"/>
+        <templateParameter name="strictHostKeyChecking" description="yes / no"/>
+        <templateParameter name="connectTimeoutMs"/>
+
+        <!-- failure handling -->
+        <templateParameter name="maxRetries"/>
+        <templateParameter name="retryDelayMs"/>
+
+        <!-- Each route gets its own persistent list of uploaded files (survives restarts). -->
+        <templateBean name="uploadedFiles" type="#class:org.apache.camel.support.processor.idempotent.FileIdempotentRepository">
+            <properties>
+                <property key="fileStore" value="{{idempotentFile}}"/>
+                <property key="cacheSize" value="10000"/>
+            </properties>
+        </templateBean>
+
+        <route>
+            <!--
+                Local folder consumer:
+                  include=RAW((?-i)regex)  only files whose whole name matches; (?-i) makes the match case-sensitive
+                                           (Camel compiles include case-insensitively), RAW keeps the regex untouched
+                  readLock=changed         skip files that are still being written: a file is picked up only when its
+                  readLockCheckInterval    size and timestamp did not change for one check interval
+                  readLockTimeout          a file that keeps changing is skipped and retried at the next poll
+                  idempotent=true          never upload the same file twice: the key (name + size + timestamp) is stored
+                  idempotentRepository     in this route's file once the upload succeeded (failed files are not recorded)
+                  move / moveFailed        after success the file goes to doneDir, after a final failure to errorDir
+                  sortBy=file:modified     oldest file first
+            -->
+            <from uri="file:{{sourceDir}}?include=RAW((?-i){{fileNameRegex}})&amp;delay={{pollDelayMs}}&amp;readLock=changed&amp;readLockCheckInterval={{readLockCheckIntervalMs}}&amp;readLockTimeout={{readLockTimeoutMs}}&amp;idempotent=true&amp;idempotentRepository=#{{uploadedFiles}}&amp;idempotentKey=${file:name}-${file:size}-${header.CamelFileLastModified}&amp;move=RAW({{doneDir}})&amp;moveFailed=RAW({{errorDir}})&amp;sortBy=file:modified"/>
+
+            <!--
+                An upload that fails is retried maxRetries times (retryDelayMs apart). After that the reason is logged
+                and the exception is left unhandled, so the file consumer moves the file to errorDir.
+            -->
+            <onException>
+                <exception>java.lang.Exception</exception>
+                <redeliveryPolicy maximumRedeliveries="{{maxRetries}}" redeliveryDelay="{{retryDelayMs}}"
+                                  logRetryAttempted="true" retryAttemptedLogLevel="WARN" logExhausted="false"/>
+                <!-- reason = message + the underlying cause (e.g. "Cannot connect to ..." + "HostKey has been changed") -->
+                <setProperty name="failureReason">
+                    <simple>${exception.message}</simple>
+                </setProperty>
+                <filter>
+                    <simple>${exception.cause} != null</simple>
+                    <setProperty name="failureReason">
+                        <simple>${exchangeProperty.failureReason} (${exception.cause.message})</simple>
+                    </setProperty>
+                </filter>
+                <log loggingLevel="ERROR" logName="sftp.transfer"
+                     message="Transfer FAILED: route=${routeId} file=${header.CamelFileName} host={{host}}:{{port}} remoteDir={{remoteDir}} result=FAILED after {{maxRetries}} retries, moved to {{errorDir}} - reason: ${exchangeProperty.failureReason}"/>
+            </onException>
+
+            <log logName="sftp.transfer"
+                 message="Uploading: route=${routeId} file=${header.CamelFileName} (${header.CamelFileLength} bytes) host={{host}}:{{port}} remoteDir={{remoteDir}}"/>
+
+            <!--
+                SFTP producer (credentials are wrapped in RAW so special characters are passed on unchanged;
+                Camel masks password/passphrase values whenever it logs an endpoint URI):
+                  fileName=<remoteDir><name>  the target path. It is deliberately NOT the endpoint path: Camel treats the
+                                              endpoint path as relative to the login folder (it strips a leading '/'),
+                                              while a file name may be absolute ("/inbound/payments/PAY_1.csv")
+                  preferredAuthentications  only the methods that are configured (publickey and/or password)
+                  knownHostsFile + strictHostKeyChecking=yes   reject servers whose host key is unknown or changed
+                  useUserKnownHostsFile=false                  never fall back to ~/.ssh/known_hosts silently
+                  maximumReconnectAttempts=0   no hidden reconnect loop: retries are governed by maxRetries only
+                  autoCreate=false             never create remote folders (a mistyped remoteDir fails instead)
+                  tempFileName=<name>.part     upload under a temporary name, rename when complete, so the remote
+                  eagerDeleteTargetFile=false  side never sees a partial file (an existing file is replaced at the end)
+            -->
+            <to uri="sftp://{{host}}:{{port}}?fileName=RAW({{remoteDir}}${file:onlyname})&amp;username=RAW({{username}})&amp;password=RAW({{password}})&amp;privateKeyFile=RAW({{privateKeyFile}})&amp;privateKeyPassphrase=RAW({{privateKeyPassphrase}})&amp;preferredAuthentications={{preferredAuthentications}}&amp;knownHostsFile=RAW({{knownHostsFile}})&amp;strictHostKeyChecking={{strictHostKeyChecking}}&amp;useUserKnownHostsFile=false&amp;connectTimeout={{connectTimeoutMs}}&amp;maximumReconnectAttempts=0&amp;autoCreate=false&amp;tempFileName=${file:onlyname}.part&amp;eagerDeleteTargetFile=false&amp;fileExist=Override"/>
+
+            <log logName="sftp.transfer"
+                 message="Transfer OK: route=${routeId} file=${header.CamelFileName} host={{host}}:{{port}} remoteDir={{remoteDir}} result=SUCCESS"/>
+        </route>
+    </routeTemplate>
+
+</routeTemplates>

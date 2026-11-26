@@ -1,0 +1,42 @@
+# Profile "local", used by LocalDemoApplication (mvn spring-boot:test-run): two embedded SFTP servers on 127.0.0.1.
+# local.* and the LOCAL_* "environment variables" are set by LocalDemoApplication (generated per run).
+# Uploaded files are moved to the backup folders ${local.work}/backup/<bank> (doneDir); failed ones go to
+# out/<bank>/error (the default errorDir).
+sftp-transfer:
+  pollDelay: 2s
+  knownHostsFile: ${local.work}/known_hosts
+  retryDelay: 2s
+  idempotentDir: ${local.work}/idempotent
+
+  transfers:
+    - name: bankA-payments
+      sourceDir: ${local.work}/out/bankA
+      filePattern: "PAY_.*\\.csv"
+      host: 127.0.0.1
+      port: ${local.portA}
+      username: userA
+      privateKeyPath: ${local.work}/client_id_rsa
+      privateKeyPassphrase: ${LOCAL_KEY_PASSPHRASE}
+      remoteDir: /inbound/payments
+      doneDir: ${local.work}/backup/bankA
+
+    - name: bankA-statements
+      sourceDir: ${local.work}/out/bankA
+      filePattern: "glob:STMT_*.xml"
+      host: 127.0.0.1
+      port: ${local.portA}
+      username: userA
+      privateKeyPath: ${local.work}/client_id_rsa
+      privateKeyPassphrase: ${LOCAL_KEY_PASSPHRASE}
+      remoteDir: /inbound/statements
+      doneDir: ${local.work}/backup/bankA
+
+    - name: bankB-reports
+      sourceDir: ${local.work}/out/bankB
+      filePattern: "RPT_.*\\.txt"
+      host: 127.0.0.1
+      port: ${local.portB}
+      username: userB
+      password: ${LOCAL_SFTP_PASSWORD}
+      remoteDir: /upload/reports
+      doneDir: ${local.work}/backup/bankB
